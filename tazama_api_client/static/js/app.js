@@ -17,6 +17,7 @@ const API = {
     creditor: '/api/test/velocity-creditor',
     attackScenario: '/api/test/attack-scenario',
     e2eFlow: '/api/test/e2e-flow',
+    dbSummary: '/api/test/db-summary',
     logs: (container) => `/api/logs/${container}`,
     fraudAlerts: '/api/fraud-alerts',
     history: '/api/history'
@@ -110,18 +111,100 @@ async function checkHealth() {
     }
 }
 
+async function loadDbSummary() {
+    const content = document.getElementById('dbSummaryContent');
+    const historyContent = document.getElementById('dbHistoryContent');
+    const toggleIcon = document.getElementById('dbHistoryToggleIcon');
+
+    // Auto-expand when loading
+    if (historyContent) {
+        historyContent.style.display = 'block';
+        if (toggleIcon) toggleIcon.textContent = '▼';
+    }
+
+    content.innerHTML = '<em style="color: #94a3b8;">Loading...</em>';
+
+    try {
+        const response = await fetch(API.dbSummary);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            let html = `<div style="margin-bottom: 0.75rem; color: #fff;"><strong>Total Transaksi: ${data.total_transactions}</strong></div>`;
+
+            // Debtors table
+            html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">`;
+            html += `<div>`;
+            html += `<div style="font-weight: 600; margin-bottom: 0.5rem; color: #f87171;">👤 Debtor (Pengirim)</div>`;
+            if (data.debtors && data.debtors.length > 0) {
+                html += `<table style="width: 100%; font-size: 0.85rem; border-collapse: collapse;">`;
+                html += `<tr style="background: rgba(255,255,255,0.1);"><th style="padding: 6px; text-align: left; color: #e2e8f0;">Account</th><th style="padding: 6px; text-align: right; color: #e2e8f0;">Tx</th></tr>`;
+                data.debtors.forEach(d => {
+                    const bgColor = d.tx_count >= 3 ? 'rgba(239, 68, 68, 0.2)' : 'transparent';
+                    html += `<tr style="background: ${bgColor};"><td style="padding: 5px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #cbd5e1;">${d.account}</td><td style="padding: 5px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.1); color: #cbd5e1; font-weight: ${d.tx_count >= 3 ? '700' : '400'};">${d.tx_count}</td></tr>`;
+                });
+                html += `</table>`;
+            } else {
+                html += `<em style="color: #94a3b8;">Tidak ada data</em>`;
+            }
+            html += `</div>`;
+
+            // Creditors table
+            html += `<div>`;
+            html += `<div style="font-weight: 600; margin-bottom: 0.5rem; color: #34d399;">🏦 Creditor (Penerima)</div>`;
+            if (data.creditors && data.creditors.length > 0) {
+                html += `<table style="width: 100%; font-size: 0.85rem; border-collapse: collapse;">`;
+                html += `<tr style="background: rgba(255,255,255,0.1);"><th style="padding: 6px; text-align: left; color: #e2e8f0;">Account</th><th style="padding: 6px; text-align: right; color: #e2e8f0;">Tx</th></tr>`;
+                data.creditors.forEach(c => {
+                    const bgColor = c.tx_count >= 3 ? 'rgba(239, 68, 68, 0.2)' : 'transparent';
+                    html += `<tr style="background: ${bgColor};"><td style="padding: 5px; border-bottom: 1px solid rgba(255,255,255,0.1); color: #cbd5e1;">${c.account}</td><td style="padding: 5px; text-align: right; border-bottom: 1px solid rgba(255,255,255,0.1); color: #cbd5e1; font-weight: ${c.tx_count >= 3 ? '700' : '400'};">${c.tx_count}</td></tr>`;
+                });
+                html += `</table>`;
+            } else {
+                html += `<em style="color: #94a3b8;">Tidak ada data</em>`;
+            }
+            html += `</div></div>`;
+
+            // Add hint
+            html += `<div style="margin-top: 0.75rem; padding: 0.5rem; background: rgba(251, 191, 36, 0.1); border-radius: 6px; font-size: 0.8rem; color: #fbbf24;">💡 Highlight merah = sudah ≥3 transaksi (potensi trigger Rule 901/902)</div>`;
+
+            content.innerHTML = html;
+        } else {
+            content.innerHTML = `<span style="color: #f87171;">Error: ${data.message}</span>`;
+        }
+    } catch (error) {
+        content.innerHTML = `<span style="color: #f87171;">Error: ${error.message}</span>`;
+    }
+}
+
+function toggleDbHistory() {
+    const content = document.getElementById('dbHistoryContent');
+    const icon = document.getElementById('dbHistoryToggleIcon');
+
+    if (content.style.display === 'none') {
+        content.style.display = 'block';
+        icon.textContent = '▼';
+    } else {
+        content.style.display = 'none';
+        icon.textContent = '▶';
+    }
+}
+
 async function testPacs008() {
     const formData = new FormData();
     const acc = document.getElementById('debtorAccount008').value;
+    const credAcc = document.getElementById('creditorAccount008').value;
     const amt = document.getElementById('amount008').value;
 
     if (acc) formData.append('debtor_account', acc);
+    if (credAcc) formData.append('creditor_account', credAcc);
     if (amt) formData.append('amount', amt);
 
     await handleSimpleTest(API.pacs008, formData, 'response008', (data) => {
         if (data.payload_sent?.GrpHdr?.MsgId) {
             document.getElementById('messageId002').value = data.payload_sent.GrpHdr.MsgId;
         }
+        // Always update fraud alerts (even if empty to clear old alerts)
+        updateFraudAlerts(data.fraud_alerts || [], data.request_summary);
     });
 }
 

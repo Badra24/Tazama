@@ -59,6 +59,7 @@ set_batch_history(test_history)
 set_e2e_flow_history(test_history)
 
 # Mount routers
+
 app.include_router(health_router)
 app.include_router(transactions_router)
 app.include_router(attacks_router)

@@ -184,7 +184,6 @@ insert into rule (configuration) values (
           "lowerLimit": 5,
           "reason": "Two or more similar amounts detected in the most recent transactions from the debtor"
         }
-
       ]
     }
 }');

@@ -25,22 +25,36 @@ def set_history_reference(history_list):
     test_history = history_list
 
 
-def fetch_logs_internal(container_name, tail=50):
-    """Fetch logs from a docker container"""
+def fetch_logs_internal(container_name, tail=50, since_seconds=None):
+    """Fetch logs from a docker container
+    
+    Args:
+        container_name: Docker container name
+        tail: Number of log lines to fetch
+        since_seconds: Only get logs from the last N seconds (optional)
+    """
     try:
         if not container_name.startswith("tazama-"):
             return {"status": "error", "message": "Invalid container name"}
+        
+        cmd = ["docker", "logs", container_name, "--tail", str(tail)]
+        
+        # Add --since flag if specified to filter out old logs
+        if since_seconds:
+            cmd.extend(["--since", f"{since_seconds}s"])
             
         result = subprocess.run(
-            ["docker", "logs", container_name, "--tail", str(tail)],
+            cmd,
             capture_output=True,
             text=True
         )
         
         if result.returncode != 0:
             return {"status": "error", "message": result.stderr}
-            
-        return {"status": "success", "logs": result.stdout}
+        
+        # Docker logs may output to stderr, combine both
+        logs = result.stdout + result.stderr
+        return {"status": "success", "logs": logs}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -264,28 +278,29 @@ async def test_velocity(
             )
             status_008, time_008, response_008 = tms_client.send_pacs008(payload)
             
-            pacs002_response_json = {}
+            # Send pacs.002 confirmation (REQUIRED for Rule 901/902)
+            # Rule 901/902 expect FIToFIPmtSts (pacs.002 format), not pacs.008
+            pacs002_status = None
             if status_008 == 200:
                 msg_id = payload.get("FIToFICstmrCdtTrf", {}).get("GrpHdr", {}).get("MsgId")
                 e2e_id = payload.get("FIToFICstmrCdtTrf", {}).get("CdtTrfTxInf", {}).get("PmtId", {}).get("EndToEndId")
                 
                 pacs002_payload = generate_pacs002(msg_id, e2e_id, "ACCC")
-                status_002, _, response_002 = tms_client.send_pacs002(pacs002_payload)
-                pacs002_response_json = response_002 if isinstance(response_002, dict) else {}
-
+                pacs002_status, _, _ = tms_client.send_pacs002(pacs002_payload)
+            
             results.append({
                 "iteration": i + 1,
                 "status": status_008,
+                "pacs002_status": pacs002_status,
                 "response_time_ms": time_008,
                 "amount": amt,
                 "creditor": creditor_acc,
-                "response": response_008 if isinstance(response_008, dict) else {},
-                "pacs002_response": pacs002_response_json
+                "response": response_008 if isinstance(response_008, dict) else {}
             })
             
             test_history.append({
                 "timestamp": datetime.now().isoformat(),
-                "type": "pacs.008 (Velocity)",
+                "type": "pacs.008 + pacs.002 (Velocity)",
                 "status": status_008,
                 "response_time_ms": time_008,
                 "success": status_008 == 200,
