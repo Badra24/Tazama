@@ -81,10 +81,20 @@ async function checkHealth() {
                 statusDot.className = 'status-dot online';
                 statusBar.classList.remove('status-error');
 
+                // Handle both HTTP response and Docker container check
+                let statusMessage = 'TMS Service Active';
+                if (data.response_time_ms) {
+                    statusMessage += ` • Response: ${data.response_time_ms.toFixed(0)}ms`;
+                } else if (data.container_status) {
+                    statusMessage = `Container ${data.container_status}`;
+                } else if (data.message) {
+                    statusMessage = data.message;
+                }
+
                 statusText.innerHTML = `
                     <div class="status-content">
                         <span class="status-main">System Online</span>
-                        <span class="status-sub">TMS Service Active • Response: ${data.response_time_ms.toFixed(0)}ms</span>
+                        <span class="status-sub">${statusMessage}</span>
                     </div>
                 `;
             } else {

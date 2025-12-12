@@ -4,6 +4,7 @@ Payload Generator untuk ISO 20022 Messages
 from faker import Faker
 from datetime import datetime
 import uuid
+import hashlib
 
 fake = Faker('id_ID')
 
@@ -11,6 +12,27 @@ fake = Faker('id_ID')
 def create_uuid():
     """Generate UUID without dashes (ISO 20022 compliant)"""
     return str(uuid.uuid4()).replace('-', '')
+
+
+def generate_account_phone_id(account_id: str) -> str:
+    """
+    Generate consistent phone ID from account ID.
+    This ensures fraud rules can correctly attribute alerts to specific accounts.
+    
+    Args:
+        account_id: Account identifier
+    
+    Returns:
+        Phone number format ID (e.g., +62812345678)
+    """
+    if not account_id:
+        return "+62811111111"  # Default fallback
+    
+    # Create consistent hash from account_id
+    hash_digest = hashlib.md5(account_id.encode()).hexdigest()
+    # Convert first 9 hex chars to decimal and format as phone
+    phone_suffix = int(hash_digest[:9], 16) % 1000000000
+    return f"+62{phone_suffix:09d}"
 
 
 def generate_pain001(debtor_account=None, amount=None, debtor_name=None, 
@@ -502,7 +524,12 @@ def generate_pain013(debtor_account=None, amount=None, debtor_name=None,
 
 
 def generate_pacs008(debtor_account=None, amount=None, debtor_name=None, creditor_account=None, creditor_name=None):
-    """Generate pacs.008 payment request matching Postman Collection structure (Tazama Compatible)"""
+    """
+    Generate pacs.008 payment request matching Postman Collection structure (Tazama Compatible)
+    
+    IMPORTANT: Debtor ID is now dynamically generated from debtor_account.
+    This ensures fraud rules correctly attribute alerts to the right account.
+    """
     message_id = create_uuid()
     end_to_end_id = create_uuid()  # Postman uses uuid for E2E
     
@@ -513,14 +540,16 @@ def generate_pacs008(debtor_account=None, amount=None, debtor_name=None, credito
     creditor_name_parts = (creditor_name or fake.name()).split()
     if len(creditor_name_parts) < 2: creditor_name_parts.append("Merchant")
 
-    debtor_id = "+27730975224" # Fixed from Postman for stability or generated
+    # PHASE 2 FIX: Dynamic debtor_id based on account for correct attribution
+    debtor_account_id = debtor_account or "1234567890"
+    debtor_id = generate_account_phone_id(debtor_account_id)  # Dynamic, not hardcoded!
     debtor_id_type = "MSISDN"
-    debtor_account_id = debtor_account or "1234567890" 
-    debtor_account_id_type = "MSISDN" # Tazama seems to map this
+    debtor_account_id_type = "MSISDN"  # Tazama maps this
     
-    creditor_id = "+27707650428"
+    # PHASE 2 FIX: Dynamic creditor_id based on account
+    creditor_account_id = creditor_account or "0987654321"
+    creditor_id = generate_account_phone_id(creditor_account_id)  # Dynamic!
     creditor_id_type = "MSISDN"
-    creditor_account_id = creditor_account or "0987654321" 
     creditor_account_id_type = "MSISDN"
 
     transaction_amount = amount or float(round(fake.random.uniform(100, 10000), 2))

@@ -430,6 +430,22 @@ insert into network_map (configuration) values (
             {
               "id": "EFRuP@1.0.0",
               "cfg": "none"
+            },
+            {
+              "id": "006@1.0.0",
+              "cfg": "1.0.0"
+            },
+            {
+              "id": "018@1.0.0",
+              "cfg": "1.0.0"
+            },
+            {
+              "id": "901@1.0.0",
+              "cfg": "1.0.0"
+            },
+            {
+              "id": "902@1.0.0",
+              "cfg": "1.0.0"
             }
           ]
         }
@@ -445,25 +461,9 @@ insert into network_map (configuration) values (
           "cfg": "999@1.0.0",
           "tenantId": "DEFAULT",
           "rules": [
-             {
+            {
               "id": "EFRuP@1.0.0",
               "cfg": "none"
-            },
-            {
-              "id": "901@1.0.0",
-              "cfg": "1.0.0"
-            },
-            {
-              "id": "902@1.0.0",
-              "cfg": "1.0.0"
-            },
-            {
-              "id": "006@1.0.0",
-              "cfg": "1.0.0"
-            },
-            {
-              "id": "018@1.0.0",
-              "cfg": "1.0.0"
             }
           ]
         }

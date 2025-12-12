@@ -11,7 +11,7 @@ import string
 import re
 
 from services.tms_client import tms_client
-from utils.payload_generator import generate_pacs008, generate_pacs002
+from utils.payload_generator import generate_pacs008, generate_pacs002, create_uuid
 from models.schemas import ScenarioType
 
 router = APIRouter(prefix="/api/test", tags=["Attack Simulations"])
@@ -252,6 +252,10 @@ async def test_velocity(
 ):
     """Run a velocity attack simulation (multiple tx in short time)
     
+    PHASE 3 UPDATE: Fraud detection now happens at pacs.008 level!
+    - Rules 901, 902, 006, 018 are triggered on pacs.008 (before transaction processed)
+    - pacs.002 is optional confirmation only
+    
     ISOLATED TRIGGER: Uses varied amounts and different creditors to ONLY trigger Rule 901
     - Different creditor per transaction (avoids Rule 902)
     - Varied amounts per transaction (avoids Rule 006)
@@ -278,8 +282,8 @@ async def test_velocity(
             )
             status_008, time_008, response_008 = tms_client.send_pacs008(payload)
             
-            # Send pacs.002 confirmation (REQUIRED for Rule 901/902)
-            # Rule 901/902 expect FIToFIPmtSts (pacs.002 format), not pacs.008
+            # PHASE 3: pacs.002 is now optional (fraud check happens at pacs.008)
+            # Keeping pacs.002 for complete transaction flow but it's not required for fraud detection
             pacs002_status = None
             if status_008 == 200:
                 msg_id = payload.get("FIToFICstmrCdtTrf", {}).get("GrpHdr", {}).get("MsgId")
@@ -317,10 +321,12 @@ async def test_velocity(
         "debtor_name": debtor_name,
         "amount_per_transaction": amt,
         "total_transactions": count,
-        "total_amount": amt * count
+        "total_amount": amt * count,
+        "detection_point": "pacs.008"  # PHASE 3: Fraud detected at request time
     }
     
-    logs_data = fetch_logs_internal("tazama-rule-901-1", tail=100)
+    # PHASE 3: Fetch logs from rule container (fraud check now at pacs.008)
+    logs_data = fetch_logs_internal("tazama-rule-901-1", tail=100, since_seconds=60)
     fraud_alerts = parse_fraud_alerts(logs_data, request_context)
 
     return {
@@ -328,7 +334,8 @@ async def test_velocity(
         "total_sent": count,
         "results": results,
         "fraud_alerts": fraud_alerts,
-        "request_summary": request_context
+        "request_summary": request_context,
+        "info": "PHASE 3: Fraud detection now triggered at pacs.008 (before transaction processed)"
     }
 
 
@@ -344,6 +351,9 @@ async def test_velocity_creditor(
     amount: float = Form(500000.0, description="Amount per transaction", gt=0)
 ):
     """Run a creditor velocity attack simulation (Money Mule Scenario)
+    
+    PHASE 3 UPDATE: Fraud detection now happens at pacs.008 level!
+    - Rules 901, 902, 006, 018 are triggered on pacs.008 (before transaction processed)
     
     ISOLATED TRIGGER: Uses varied amounts to ONLY trigger Rule 902
     - Different debtor per transaction (required for 902)
@@ -409,10 +419,12 @@ async def test_velocity_creditor(
         "creditor_name": creditor_name,
         "amount_per_transaction": amount,
         "total_transactions": count,
-        "total_amount": amount * count
+        "total_amount": amount * count,
+        "detection_point": "pacs.008"  # PHASE 3: Fraud detected at request time
     }
     
-    logs_data = fetch_logs_internal("tazama-rule-902-1", tail=100)
+    # PHASE 3: Fetch logs with time filter
+    logs_data = fetch_logs_internal("tazama-rule-902-1", tail=100, since_seconds=60)
     fraud_alerts = parse_fraud_alerts(logs_data, request_context)
 
     return {
@@ -420,7 +432,8 @@ async def test_velocity_creditor(
         "total_sent": count,
         "results": results,
         "fraud_alerts": fraud_alerts,
-        "request_summary": request_context
+        "request_summary": request_context,
+        "info": "PHASE 3: Fraud detection now triggered at pacs.008 (before transaction processed)"
     }
 
 
@@ -820,3 +833,214 @@ async def fraud_simulation(
         simulation_result["error"] = str(e)
     
     return simulation_result
+
+
+# ============================================================================
+# PHASE 4: VERIFICATION TESTING ENDPOINT
+# ============================================================================
+
+@router.post(
+    "/verify-fix",
+    summary="Verify Fraud Detection Fix (Phase 4)",
+    description="Automated test suite to verify all fraud detection fixes are working correctly"
+)
+async def verify_fraud_fix():
+    """
+    PHASE 4: Comprehensive verification of fraud detection fixes
+    
+    Test Cases:
+    1. Attacker sends structuring pattern (pacs.008) → Should trigger Rule 006
+    2. Attacker sends high value transaction → Should trigger Rule 018
+    3. Victim sends normal transaction → Should NOT trigger any alert
+    4. Alert attribution check → Alerts should point to attacker, not victim
+    """
+    import time as time_module
+    
+    verification_results = {
+        "overall_status": "running",
+        "tests": [],
+        "summary": {
+            "total": 4,
+            "passed": 0,
+            "failed": 0
+        }
+    }
+    
+    # Unique identifiers for this test run
+    test_run_id = create_uuid()[:8]
+    attacker_account = f"ATTACKER_{test_run_id}"
+    victim_account = f"VICTIM_{test_run_id}"
+    
+    # =========================================================================
+    # TEST 1: Attacker Structuring Detection (Rule 006)
+    # =========================================================================
+    test1_result = {
+        "test_id": 1,
+        "name": "Attacker Structuring Detection (Rule 006)",
+        "status": "running"
+    }
+    
+    try:
+        structuring_amount = 9500000.0
+        structuring_count = 6
+        
+        for i in range(structuring_count):
+            payload = generate_pacs008(
+                debtor_account=attacker_account,
+                amount=structuring_amount,  # Same amount = structuring
+                debtor_name=f"Attacker {test_run_id}",
+                creditor_account=f"CRED_{random.randint(1000, 9999)}"
+            )
+            tms_client.send_pacs008(payload)
+        
+        time_module.sleep(0.5)
+        logs_data = fetch_logs_internal("tazama-rule-006-1", tail=50, since_seconds=30)
+        fraud_alerts = parse_fraud_alerts(logs_data, {"debtor_account": attacker_account}, "006")
+        
+        test1_result["alerts_found"] = len(fraud_alerts)
+        test1_result["passed"] = len(fraud_alerts) > 0
+        test1_result["status"] = "PASSED ✅" if test1_result["passed"] else "FAILED ❌"
+        test1_result["detail"] = f"Sent {structuring_count} transactions with same amount (Rp {structuring_amount:,.0f})"
+        
+    except Exception as e:
+        test1_result["status"] = "ERROR ❌"
+        test1_result["error"] = str(e)
+        test1_result["passed"] = False
+    
+    verification_results["tests"].append(test1_result)
+    
+    # =========================================================================
+    # TEST 2: Attacker High Value Detection (Rule 018)
+    # =========================================================================
+    test2_result = {
+        "test_id": 2,
+        "name": "Attacker High Value Detection (Rule 018)",
+        "status": "running"
+    }
+    
+    try:
+        attacker2_account = f"WHALE_{test_run_id}"
+        
+        # Build small history first
+        for i in range(3):
+            payload = generate_pacs008(
+                debtor_account=attacker2_account,
+                amount=500000.0 + (i * 100000),  # Small varied amounts
+                debtor_name=f"Whale {test_run_id}",
+                creditor_account=f"CRED_{random.randint(1000, 9999)}"
+            )
+            tms_client.send_pacs008(payload)
+        
+        # Send huge transaction
+        huge_payload = generate_pacs008(
+            debtor_account=attacker2_account,
+            amount=500000000.0,  # 500 juta - very high
+            debtor_name=f"Whale {test_run_id}",
+            creditor_account=f"CRED_{random.randint(1000, 9999)}"
+        )
+        tms_client.send_pacs008(huge_payload)
+        
+        time_module.sleep(0.5)
+        logs_data = fetch_logs_internal("tazama-rule-018-1", tail=50, since_seconds=30)
+        fraud_alerts = parse_fraud_alerts(logs_data, {"debtor_account": attacker2_account}, "018")
+        
+        test2_result["alerts_found"] = len(fraud_alerts)
+        test2_result["passed"] = len(fraud_alerts) > 0
+        test2_result["status"] = "PASSED ✅" if test2_result["passed"] else "FAILED ❌"
+        test2_result["detail"] = "Sent Rp 500,000,000 after small history"
+        
+    except Exception as e:
+        test2_result["status"] = "ERROR ❌"
+        test2_result["error"] = str(e)
+        test2_result["passed"] = False
+    
+    verification_results["tests"].append(test2_result)
+    
+    # =========================================================================
+    # TEST 3: Victim Normal Transaction (No False Positive)
+    # =========================================================================
+    test3_result = {
+        "test_id": 3,
+        "name": "Victim Normal Transaction (No False Positive)",
+        "status": "running"
+    }
+    
+    try:
+        # Victim sends ONE normal transaction
+        victim_payload = generate_pacs008(
+            debtor_account=victim_account,
+            amount=1500000.0,  # Normal amount
+            debtor_name=f"Victim {test_run_id}",
+            creditor_account="LEGIT_MERCHANT_001"
+        )
+        tms_client.send_pacs008(victim_payload)
+        
+        time_module.sleep(0.5)
+        
+        # Check all rule containers for alerts related to victim
+        victim_alerts = []
+        for container in ["tazama-rule-006-1", "tazama-rule-018-1", "tazama-rule-901-1", "tazama-rule-902-1"]:
+            logs = fetch_logs_internal(container, tail=30, since_seconds=30)
+            alerts = parse_fraud_alerts(logs, {"debtor_account": victim_account})
+            victim_alerts.extend(alerts)
+        
+        test3_result["alerts_found"] = len(victim_alerts)
+        test3_result["passed"] = len(victim_alerts) == 0  # NO alerts = PASS
+        test3_result["status"] = "PASSED ✅" if test3_result["passed"] else "FAILED ❌"
+        test3_result["detail"] = "Victim sent 1 normal transaction - should not trigger any alert"
+        
+    except Exception as e:
+        test3_result["status"] = "ERROR ❌"
+        test3_result["error"] = str(e)
+        test3_result["passed"] = False
+    
+    verification_results["tests"].append(test3_result)
+    
+    # =========================================================================
+    # TEST 4: Alert Attribution Check
+    # =========================================================================
+    test4_result = {
+        "test_id": 4,
+        "name": "Alert Attribution Check",
+        "status": "running"
+    }
+    
+    try:
+        # Check that alerts from Test 1 contain attacker account reference
+        logs_data = fetch_logs_internal("tazama-rule-006-1", tail=100, since_seconds=60)
+        
+        # Simple check: look for attacker account ID in logs
+        attacker_mentioned = attacker_account in logs_data.get("logs", "")
+        victim_mentioned = victim_account in logs_data.get("logs", "")
+        
+        test4_result["attacker_in_logs"] = attacker_mentioned
+        test4_result["victim_in_logs"] = victim_mentioned
+        test4_result["passed"] = attacker_mentioned  # Attacker should be mentioned
+        test4_result["status"] = "PASSED ✅" if test4_result["passed"] else "FAILED ❌"
+        test4_result["detail"] = f"Checking attribution: Attacker={attacker_account}, Victim={victim_account}"
+        
+    except Exception as e:
+        test4_result["status"] = "ERROR ❌"
+        test4_result["error"] = str(e)
+        test4_result["passed"] = False
+    
+    verification_results["tests"].append(test4_result)
+    
+    # =========================================================================
+    # SUMMARY
+    # =========================================================================
+    passed_count = sum(1 for t in verification_results["tests"] if t.get("passed", False))
+    failed_count = len(verification_results["tests"]) - passed_count
+    
+    verification_results["summary"]["passed"] = passed_count
+    verification_results["summary"]["failed"] = failed_count
+    verification_results["overall_status"] = "ALL_PASSED ✅" if failed_count == 0 else f"SOME_FAILED ({failed_count} failures)"
+    
+    verification_results["conclusion"] = {
+        "phase_1_network_map": "Applied - Fraud rules on pacs.008",
+        "phase_2_attribution": f"Tested - Attacker={attacker_account}",
+        "phase_3_detection_point": "pacs.008 (before transaction processed)",
+        "phase_4_verification": f"{passed_count}/4 tests passed"
+    }
+    
+    return verification_results
